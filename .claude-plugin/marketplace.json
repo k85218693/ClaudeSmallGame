@@ -1,0 +1,15 @@
+{
+  "name": "claude-small-game",
+  "owner": { "name": "Yao Chi Yang" },
+  "metadata": { "description": "claude-small-game: small games inside Claude Code" },
+  "plugins": [
+    {
+      "name": "claude-small-game",
+      "source": "./",
+      "description": "A 5x3 slot machine above the Claude Code prompt, paid for by Claude finishing turns",
+      "homepage": "https://github.com/k85218693/ClaudeSmallGame",
+      "repository": "https://github.com/k85218693/ClaudeSmallGame",
+      "license": "MIT"
+    }
+  ]
+}

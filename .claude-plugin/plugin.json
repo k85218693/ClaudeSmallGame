@@ -1,0 +1,10 @@
+{
+  "name": "claude-small-game",
+  "version": "0.1.0",
+  "description": "A 5x3 slot machine above the Claude Code prompt: spin with space, reels stop left to right, winning lines flash. Credits live in one wallet per machine and Claude pays you 10 every time it finishes a turn. Needs function hooks (early access) and an interactive terminal.",
+  "author": { "name": "Yao Chi Yang" },
+  "homepage": "https://github.com/k85218693/ClaudeSmallGame",
+  "repository": "https://github.com/k85218693/ClaudeSmallGame",
+  "license": "MIT",
+  "keywords": ["slot", "game", "terminal", "tui", "arcade", "function-hooks"]
+}
