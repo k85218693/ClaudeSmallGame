@@ -1,0 +1,28 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+# it only ever reads the checkout
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # 24 runs TypeScript with no build step, which is what keeps this repo install-free
+          node-version: '24'
+      # zero config, one binary: correctness and dead-code rules over the plugin's own sources.
+      # Pinned exactly: oxlint ships new correctness rules in minor releases, so a looser pin fails
+      # builds that changed nothing. Bump it deliberately.
+      - run: npx --yes oxlint@1.83.0 hooks tests --deny-warnings
+      # the game rules and the exact RTP; the board and the hooks module need Claude Code to run and
+      # are not covered here
+      - run: node --test
+      # no type check here: the 'claude-code' types are generated per machine by /plugin-types and
+      # are not in the repo, so tsc only runs locally
