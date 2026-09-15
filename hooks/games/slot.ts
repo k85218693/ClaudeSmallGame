@@ -160,3 +160,14 @@ export const applyTurnReward = (state: GameState): GameState => ({ ...state, bal
 /** a line bet that is not one of the steps leaves the state alone */
 export const setLineBet = (state: GameState, lineBet: number): GameState =>
   LINE_BETS.includes(lineBet) ? { ...state, lineBet } : state
+
+/**
+ * One step up or down the ladder of line bets, stopping at either end rather than wrapping — the
+ * board's + and -. A bet that is somehow off the ladder snaps onto its first step.
+ */
+export const stepLineBet = (state: GameState, direction: number): GameState => {
+  const at = LINE_BETS.indexOf(state.lineBet)
+  if (at < 0) return setLineBet(state, LINE_BETS[0])
+  const next = Math.min(LINE_BETS.length - 1, Math.max(0, at + Math.sign(direction)))
+  return setLineBet(state, LINE_BETS[next])
+}

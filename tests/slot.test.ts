@@ -13,6 +13,7 @@ import {
   evaluateStops,
   resolveSpin,
   setLineBet,
+  stepLineBet,
   totalBet,
   type GameState,
   type SlotSymbol,
@@ -162,6 +163,23 @@ describe('the wallet', () => {
     const state: GameState = { balance: 100, lineBet: 1 }
     for (const bet of LINE_BETS) assert.equal(setLineBet(state, bet).lineBet, bet)
     for (const bet of [0, 3, -1, 11, 1.5]) assert.deepEqual(setLineBet(state, bet), state)
+  })
+
+  it('steps up and down the ladder of line bets, and stops at both ends', () => {
+    let state: GameState = { balance: 100, lineBet: 1 }
+    assert.equal(stepLineBet(state, -1).lineBet, 1, 'the bottom step holds')
+    for (const expected of [2, 5, 10, 10]) {
+      state = stepLineBet(state, 1)
+      assert.equal(state.lineBet, expected)
+    }
+    for (const expected of [5, 2, 1, 1]) {
+      state = stepLineBet(state, -1)
+      assert.equal(state.lineBet, expected)
+    }
+  })
+
+  it('snaps a line bet that is off the ladder back onto it', () => {
+    assert.equal(stepLineBet({ balance: 100, lineBet: 7 }, 1).lineBet, LINE_BETS[0])
   })
 
   it('replays the same spin from the same seed', () => {

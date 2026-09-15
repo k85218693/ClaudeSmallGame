@@ -2,10 +2,13 @@
 import type { ClientSurface } from 'claude-code'
 import {
   INITIAL_STATE,
+  LINE_BETS,
+  LINE_COUNT,
   REELS,
   ROWS,
   evaluateStops,
   resolveSpin,
+  stepLineBet,
   totalBet,
   type GameState,
   type SlotSymbol,
@@ -47,10 +50,19 @@ export default function Slot(_props: unknown, surface: ClientSurface<State>) {
     if (!s) return
     const result = resolveSpin(s.game, Math.random)
     if ('error' in result) {
-      surface.setState({ ...s, message: `not enough credits for a ${totalBet(s.game.lineBet)}-credit spin` })
+      const bet = totalBet(s.game.lineBet)
+      const cheaper = s.game.lineBet > LINE_BETS[0] ? ' · - lowers the line bet' : ''
+      surface.setState({ ...s, message: `${s.game.balance} credits is not enough for a ${bet}-credit spin${cheaper}` })
       return
     }
     surface.setState({ game: result.state, window: result.outcome.window, outcome: result.outcome, message: undefined })
+  }
+
+  // the new bet shows on the board straight away — the next spin is not where the player finds out
+  const changeBet = (direction: number) => {
+    const s = surface.state
+    if (!s) return
+    surface.setState({ ...s, game: stepLineBet(s.game, direction), message: undefined })
   }
 
   if (surface.state === undefined) {
@@ -63,6 +75,9 @@ export default function Slot(_props: unknown, surface: ClientSurface<State>) {
       // the space bar may arrive as the character or by name
       const k = key === 'space' ? ' ' : key.toLowerCase()
       if (k === ' ' || k === 'return') spin()
+      // '=' and '_' are what the + and - keys give unshifted
+      else if (k === '+' || k === '=') changeBet(1)
+      else if (k === '-' || k === '_') changeBet(-1)
     })
   }
 
@@ -94,7 +109,7 @@ export default function Slot(_props: unknown, surface: ClientSurface<State>) {
     )
   })
 
-  const bet = totalBet(s?.game.lineBet ?? INITIAL_STATE.lineBet)
+  const lineBet = s?.game.lineBet ?? INITIAL_STATE.lineBet
   const balance = s?.game.balance ?? INITIAL_STATE.balance
   const lines = s?.outcome?.lines.length ?? 0
   const result = win > 0 ? `won ${win} on ${lines} line${lines === 1 ? '' : 's'}` : s?.outcome ? 'no win' : 'ready'
@@ -105,11 +120,16 @@ export default function Slot(_props: unknown, surface: ClientSurface<State>) {
       </Box>
       <Text wrap="truncate-end">
         <Text bold color={win > 0 ? 'yellow' : undefined}>{result}</Text>
-        <Text dimColor>{` · balance ${balance} · bet ${bet}`}</Text>
+        <Text dimColor>{' · balance '}</Text>
+        <Text>{balance}</Text>
+        <Text dimColor>{' · line bet '}</Text>
+        <Text>{lineBet}</Text>
+        <Text dimColor>{` × ${LINE_COUNT} lines = `}</Text>
+        <Text>{totalBet(lineBet)}</Text>
       </Text>
       {s?.message
         ? <Text color="redBright" wrap="truncate-end">{s.message}</Text>
-        : <Text dimColor wrap="truncate-end">click the board, then space or enter spins · Esc returns to the prompt</Text>}
+        : <Text dimColor wrap="truncate-end">click the board, then space or enter spins · + and - change the line bet · Esc returns to the prompt</Text>}
     </Box>
   )
 }
