@@ -37,17 +37,38 @@ const COLORS: Record<SlotSymbol, string> = {
 const CELL_WIDTH = 4
 const BOARD_WIDTH = REELS * CELL_WIDTH + 2
 
-type State = { game: GameState; window: SlotSymbol[][]; outcome?: SpinOutcome; message?: string }
+// The spin, counted in frames rather than wall clock: one ticker drives the whole thing, so there
+// is no drift between the reels and no timer left running when the board is idle.
+const TICK_MS = 50
+const FIRST_STOP_MS = 400
+const STOP_GAP_MS = 250
+/** the frame each reel lands on: 400ms, then every 250ms after that */
+const STOPS_AT = Array.from({ length: REELS }, (_, reel) => Math.round((FIRST_STOP_MS + STOP_GAP_MS * reel) / TICK_MS))
+const LANDED = STOPS_AT[REELS - 1]
+/** the flash after the reels land: three off-beats, ending lit */
+const FLASH_TICKS = 4
+const FLASH_BEATS = 6
+const FLASH_OVER = LANDED + FLASH_TICKS * FLASH_BEATS
+
+type Spin = { tick: number; outcome: SpinOutcome; paid: GameState }
+type State = { game: GameState; window: SlotSymbol[][]; outcome?: SpinOutcome; spin?: Spin; message?: string }
 type Span = { text: string; color: string; dim: boolean; bold: boolean }
 
+/** turning reels take no input; once they have landed the flash is just decoration, so it does not */
+const turning = (state: State): boolean => state.spin !== undefined && state.spin.tick < LANDED
+
 const randomStops = (): number[] => Array.from({ length: REELS }, () => Math.floor(Math.random() * 1e6))
+/** a column of symbols off the real strips, which is what a reel shows while it is still turning */
+const blur = (): SlotSymbol[][] => evaluateStops(randomStops(), 1).window
 
 export default function Slot(_props: unknown, surface: ClientSurface<State>) {
   const { Box, Text } = surface.elements
 
   const spin = () => {
     const s = surface.state
-    if (!s) return
+    // a press while the reels are turning is ignored: the spin that is running is the spin you get.
+    // A press during the flash starts the next one, so the board can be played at speed.
+    if (!s || turning(s)) return
     const result = resolveSpin(s.game, Math.random)
     if ('error' in result) {
       const bet = totalBet(s.game.lineBet)
@@ -55,19 +76,47 @@ export default function Slot(_props: unknown, surface: ClientSurface<State>) {
       surface.setState({ ...s, message: `${s.game.balance} credits is not enough for a ${bet}-credit spin${cheaper}` })
       return
     }
-    surface.setState({ game: result.state, window: result.outcome.window, outcome: result.outcome, message: undefined })
+    // the stake leaves now and the win arrives when the last reel lands, so the balance on screen is
+    // never ahead of the reels
+    surface.setState({
+      game: { ...s.game, balance: s.game.balance - totalBet(s.game.lineBet) },
+      window: blur(),
+      outcome: undefined,
+      spin: { tick: 0, outcome: result.outcome, paid: result.state },
+      message: undefined,
+    })
   }
 
   // the new bet shows on the board straight away — the next spin is not where the player finds out
   const changeBet = (direction: number) => {
     const s = surface.state
-    if (!s) return
+    if (!s || turning(s)) return
     surface.setState({ ...s, game: stepLineBet(s.game, direction), message: undefined })
   }
 
   if (surface.state === undefined) {
     // reels at rest before the first spin: a board to look at, and nothing paid for it
-    surface.setState({ game: INITIAL_STATE, window: evaluateStops(randomStops(), INITIAL_STATE.lineBet).window })
+    surface.setState({ game: INITIAL_STATE, window: blur() })
+    surface.every(TICK_MS, () => {
+      const s = surface.state
+      // nothing to draw between spins, so the idle board costs no frames
+      if (!s?.spin) return
+      const tick = s.spin.tick + 1
+      const landed = tick >= LANDED
+      // a reel that has landed shows the outcome; the ones still turning keep changing
+      const rolling = landed ? undefined : blur()
+      const window = rolling
+        ? s.spin.outcome.window.map((column, reel) => (tick >= STOPS_AT[reel] ? column : rolling[reel]))
+        : s.spin.outcome.window
+      surface.setState({
+        ...s,
+        // the win is only counted once every reel is home
+        game: landed ? s.spin.paid : s.game,
+        window,
+        outcome: landed ? s.spin.outcome : undefined,
+        spin: tick >= FLASH_OVER ? undefined : { ...s.spin, tick },
+      })
+    })
     surface.onPointer(ev => {
       if (ev.type === 'down') spin()
     })
@@ -82,9 +131,15 @@ export default function Slot(_props: unknown, surface: ClientSurface<State>) {
   }
 
   const s = surface.state
+  const spinning = s?.spin !== undefined
   const win = s?.outcome?.totalWin ?? 0
-  // the winning cells, exactly as the game module named them
-  const lit = new Set((s?.outcome?.lines ?? []).flatMap(line => line.cells.map(([reel, row]) => `${reel},${row}`)))
+  // the winning cells, exactly as the game module named them; they blink off and on while the flash
+  // runs and stay lit once it is over
+  const beat = s?.spin ? Math.floor((s.spin.tick - LANDED) / FLASH_TICKS) : 0
+  const showWin = !s?.spin || s.spin.tick >= LANDED
+  const lit = new Set(
+    showWin && beat % 2 === 0 ? (s?.outcome?.lines ?? []).flatMap(line => line.cells.map(([reel, row]) => `${reel},${row}`)) : [],
+  )
   const dimRest = lit.size > 0
 
   // one span per run of cells that share a colour and a weight: fewer nodes for the engine to draw
@@ -112,7 +167,10 @@ export default function Slot(_props: unknown, surface: ClientSurface<State>) {
   const lineBet = s?.game.lineBet ?? INITIAL_STATE.lineBet
   const balance = s?.game.balance ?? INITIAL_STATE.balance
   const lines = s?.outcome?.lines.length ?? 0
-  const result = win > 0 ? `won ${win} on ${lines} line${lines === 1 ? '' : 's'}` : s?.outcome ? 'no win' : 'ready'
+  const result = spinning && !showWin ? 'spinning…'
+    : win > 0 ? `won ${win} on ${lines} line${lines === 1 ? '' : 's'}`
+    : s?.outcome ? 'no win'
+    : 'ready'
   return (
     <Box flexDirection="column">
       <Box flexDirection="column" borderStyle="round" borderColor={win > 0 ? 'yellow' : 'gray'} width={BOARD_WIDTH}>
