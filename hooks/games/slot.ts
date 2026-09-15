@@ -154,6 +154,17 @@ export const resolveSpin = (
   }
 }
 
+/**
+ * Apply one spin's difference to whatever the wallet holds right now. The caller re-reads the store,
+ * hands the current wallet in here, and writes the result back, so two sessions spinning at once
+ * settle against the same file instead of overwriting each other with a balance each worked out on
+ * its own. A wallet never goes negative: the other session may already have spent what this one bet.
+ */
+export const applyDelta = (current: GameState, delta: { bet?: number; win?: number; lineBet?: number }): GameState => ({
+  balance: Math.max(0, current.balance - (delta.bet ?? 0) + (delta.win ?? 0)),
+  lineBet: delta.lineBet !== undefined && LINE_BETS.includes(delta.lineBet) ? delta.lineBet : current.lineBet,
+})
+
 /** Claude finished a turn */
 export const applyTurnReward = (state: GameState): GameState => ({ ...state, balance: state.balance + TURN_REWARD })
 

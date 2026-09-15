@@ -10,6 +10,7 @@ import {
   resolveSpin,
   stepLineBet,
   totalBet,
+  TURN_REWARD,
   type GameState,
   type SlotSymbol,
   type SpinOutcome,
@@ -50,8 +51,18 @@ const FLASH_TICKS = 4
 const FLASH_BEATS = 6
 const FLASH_OVER = LANDED + FLASH_TICKS * FLASH_BEATS
 
+/** the wallet as the hooks module last handed it over; the board never decides what it holds */
+type Props = { balance?: number; lineBet?: number } | undefined
 type Spin = { tick: number; outcome: SpinOutcome; paid: GameState }
-type State = { game: GameState; window: SlotSymbol[][]; outcome?: SpinOutcome; spin?: Spin; message?: string }
+type State = {
+  game: GameState
+  /** the last props taken up, so a wallet that has not moved is not taken up twice */
+  seen: GameState
+  window: SlotSymbol[][]
+  outcome?: SpinOutcome
+  spin?: Spin
+  message?: string
+}
 type Span = { text: string; color: string; dim: boolean; bold: boolean }
 
 /** turning reels take no input; once they have landed the flash is just decoration, so it does not */
@@ -61,7 +72,12 @@ const randomStops = (): number[] => Array.from({ length: REELS }, () => Math.flo
 /** a column of symbols off the real strips, which is what a reel shows while it is still turning */
 const blur = (): SlotSymbol[][] => evaluateStops(randomStops(), 1).window
 
-export default function Slot(_props: unknown, surface: ClientSurface<State>) {
+const fromProps = (props: Props, fallback: GameState): GameState => ({
+  balance: typeof props?.balance === 'number' ? props.balance : fallback.balance,
+  lineBet: typeof props?.lineBet === 'number' ? props.lineBet : fallback.lineBet,
+})
+
+export default function Slot(props: Props, surface: ClientSurface<State>) {
   const { Box, Text } = surface.elements
 
   const spin = () => {
@@ -71,9 +87,11 @@ export default function Slot(_props: unknown, surface: ClientSurface<State>) {
     if (!s || turning(s)) return
     const result = resolveSpin(s.game, Math.random)
     if ('error' in result) {
+      // no top-up: the three ways out are all the player gets, and they are all on screen
       const bet = totalBet(s.game.lineBet)
-      const cheaper = s.game.lineBet > LINE_BETS[0] ? ' · - lowers the line bet' : ''
-      surface.setState({ ...s, message: `${s.game.balance} credits is not enough for a ${bet}-credit spin${cheaper}` })
+      const cheaper = s.game.lineBet > LINE_BETS[0] ? `- drops the line bet to ${stepLineBet(s.game, -1).lineBet}` : 'the line bet is already at its lowest'
+      const message = `${s.game.balance} credits is not enough for a ${bet}-credit spin · ${cheaper} · Claude pays ${TURN_REWARD} each time it finishes a turn · /slot reset starts over`
+      surface.setState({ ...s, message })
       return
     }
     // the stake leaves now and the win arrives when the last reel lands, so the balance on screen is
@@ -91,12 +109,15 @@ export default function Slot(_props: unknown, surface: ClientSurface<State>) {
   const changeBet = (direction: number) => {
     const s = surface.state
     if (!s || turning(s)) return
-    surface.setState({ ...s, game: stepLineBet(s.game, direction), message: undefined })
+    const game = stepLineBet(s.game, direction)
+    if (game.lineBet !== s.game.lineBet) surface.post({ slot: true, lineBet: game.lineBet })
+    surface.setState({ ...s, game, message: undefined })
   }
 
   if (surface.state === undefined) {
     // reels at rest before the first spin: a board to look at, and nothing paid for it
-    surface.setState({ game: INITIAL_STATE, window: blur() })
+    const start = fromProps(props, INITIAL_STATE)
+    surface.setState({ game: start, seen: start, window: blur() })
     surface.every(TICK_MS, () => {
       const s = surface.state
       // nothing to draw between spins, so the idle board costs no frames
@@ -108,6 +129,9 @@ export default function Slot(_props: unknown, surface: ClientSurface<State>) {
       const window = rolling
         ? s.spin.outcome.window.map((column, reel) => (tick >= STOPS_AT[reel] ? column : rolling[reel]))
         : s.spin.outcome.window
+      // the moment the last reel is home: tell the hooks module what this spin cost and paid, and
+      // let it work out the balance against the store
+      if (landed && s.spin.tick < LANDED) surface.post({ slot: true, bet: totalBet(s.game.lineBet), win: s.spin.outcome.totalWin })
       surface.setState({
         ...s,
         // the win is only counted once every reel is home
@@ -128,6 +152,17 @@ export default function Slot(_props: unknown, surface: ClientSurface<State>) {
       else if (k === '+' || k === '=') changeBet(1)
       else if (k === '-' || k === '_') changeBet(-1)
     })
+  }
+
+  // The wallet is one file per machine, so another session — or Claude finishing a turn — can move
+  // it under this board. Whatever comes back is the truth; the board only holds a picture of it.
+  // While the reels are turning the picture is left alone, so a spin still lands on its own result.
+  const held = surface.state
+  if (held && !turning(held)) {
+    const next = fromProps(props, held.seen)
+    if (next.balance !== held.seen.balance || next.lineBet !== held.seen.lineBet) {
+      surface.setState({ ...held, game: next, seen: next })
+    }
   }
 
   const s = surface.state

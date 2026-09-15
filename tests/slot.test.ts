@@ -8,6 +8,7 @@ import {
   ROWS,
   STRIP_LENGTH,
   TURN_REWARD,
+  applyDelta,
   applyTurnReward,
   createRng,
   evaluateStops,
@@ -199,6 +200,62 @@ describe('the wallet', () => {
         assert.ok(Number.isInteger(stop) && stop >= 0 && stop < STRIP_LENGTH, `stop ${stop} is off the strip`)
       }
     }
+  })
+})
+
+describe('the wallet two sessions share', () => {
+  // The store is one file per machine, so the board posts a difference and whoever writes it re-reads
+  // first. These tests stand in for that: a fake store, two sessions, and no absolute balance anywhere.
+  const settle = (store: { wallet: GameState }, delta: { bet?: number; win?: number; lineBet?: number }) => {
+    const current = store.wallet // re-read, always, however stale the caller's own copy is
+    store.wallet = applyDelta(current, delta)
+  }
+
+  it('lands on the same balance however two sessions interleave', () => {
+    const spins = [
+      { bet: 5, win: 0 },
+      { bet: 10, win: 40 },
+      { bet: 5, win: 4 },
+      { bet: 50, win: 0 },
+      { bet: 5, win: 12 },
+      { bet: 10, win: 0 },
+    ]
+    const expected = 1000 - spins.reduce((sum, s) => sum + s.bet - s.win, 0)
+    // every way of dealing these six spins between two sessions ends in the same place
+    for (let mask = 0; mask < 1 << spins.length; mask++) {
+      const store = { wallet: { balance: 1000, lineBet: 1 } }
+      const mine = spins.filter((_, i) => (mask >> i) & 1)
+      const theirs = spins.filter((_, i) => !((mask >> i) & 1))
+      // interleaved: one from each session in turn, which is what two open sessions look like
+      for (let i = 0; i < Math.max(mine.length, theirs.length); i++) {
+        if (mine[i]) settle(store, mine[i])
+        if (theirs[i]) settle(store, theirs[i])
+      }
+      assert.equal(store.wallet.balance, expected)
+    }
+  })
+
+  it('does not let a session that bets a balance it no longer has go negative', () => {
+    const store = { wallet: { balance: 5, lineBet: 1 } }
+    // the other session spent the last of it between this one reading and posting
+    settle(store, { bet: 5, win: 0 })
+    settle(store, { bet: 5, win: 0 })
+    assert.equal(store.wallet.balance, 0)
+  })
+
+  it('carries a line bet through without touching the balance', () => {
+    const store = { wallet: { balance: 120, lineBet: 1 } }
+    settle(store, { lineBet: 10 })
+    assert.deepEqual(store.wallet, { balance: 120, lineBet: 10 })
+    // and an impossible one is left where it was
+    settle(store, { lineBet: 7 })
+    assert.equal(store.wallet.lineBet, 10)
+  })
+
+  it('applies a win with no bet, which is what a finished turn is', () => {
+    const store = { wallet: { balance: 10, lineBet: 2 } }
+    settle(store, { win: TURN_REWARD })
+    assert.deepEqual(store.wallet, { balance: 10 + TURN_REWARD, lineBet: 2 })
   })
 })
 
