@@ -50,18 +50,24 @@ const LANDED = STOPS_AT[REELS - 1]
 const FLASH_TICKS = 4
 const FLASH_BEATS = 6
 const FLASH_OVER = LANDED + FLASH_TICKS * FLASH_BEATS
+/** how long a credited turn's +10 stays on the board: long enough to catch, short enough to ignore */
+const REWARD_TICKS = Math.round(1500 / TICK_MS)
 
 /** the wallet as the hooks module last handed it over; the board never decides what it holds */
-type Props = { balance?: number; lineBet?: number } | undefined
+type Props = { balance?: number; lineBet?: number; credited?: number } | undefined
 type Spin = { tick: number; outcome: SpinOutcome; paid: GameState }
 type State = {
   game: GameState
   /** the last props taken up, so a wallet that has not moved is not taken up twice */
   seen: GameState
+  /** how many turns the hooks module had credited when this board last looked */
+  credited: number
   window: SlotSymbol[][]
   outcome?: SpinOutcome
   spin?: Spin
   message?: string
+  /** ticks left on the +10 a finished turn puts up */
+  reward?: number
 }
 type Span = { text: string; color: string; dim: boolean; bold: boolean }
 
@@ -97,6 +103,7 @@ export default function Slot(props: Props, surface: ClientSurface<State>) {
     // the stake leaves now and the win arrives when the last reel lands, so the balance on screen is
     // never ahead of the reels
     surface.setState({
+      ...s,
       game: { ...s.game, balance: s.game.balance - totalBet(s.game.lineBet) },
       window: blur(),
       outcome: undefined,
@@ -117,11 +124,18 @@ export default function Slot(props: Props, surface: ClientSurface<State>) {
   if (surface.state === undefined) {
     // reels at rest before the first spin: a board to look at, and nothing paid for it
     const start = fromProps(props, INITIAL_STATE)
-    surface.setState({ game: start, seen: start, window: blur() })
+    // whatever Claude has already earned this session is history, not a flash: the board starts even
+    surface.setState({ game: start, seen: start, credited: props?.credited ?? 0, window: blur() })
     surface.every(TICK_MS, () => {
       const s = surface.state
-      // nothing to draw between spins, so the idle board costs no frames
-      if (!s?.spin) return
+      if (!s) return
+      // the +10 runs its own count down, so a turn credited mid-spin still fades on time
+      const reward = s.reward !== undefined && s.reward > 1 ? s.reward - 1 : undefined
+      // nothing else to draw between spins, so an idle board with nothing flashing costs no frames
+      if (!s.spin) {
+        if (s.reward !== undefined) surface.setState({ ...s, reward })
+        return
+      }
       const tick = s.spin.tick + 1
       const landed = tick >= LANDED
       // a reel that has landed shows the outcome; the ones still turning keep changing
@@ -134,6 +148,7 @@ export default function Slot(props: Props, surface: ClientSurface<State>) {
       if (landed && s.spin.tick < LANDED) surface.post({ slot: true, bet: totalBet(s.game.lineBet), win: s.spin.outcome.totalWin })
       surface.setState({
         ...s,
+        reward,
         // the win is only counted once every reel is home
         game: landed ? s.spin.paid : s.game,
         window,
@@ -160,8 +175,11 @@ export default function Slot(props: Props, surface: ClientSurface<State>) {
   const held = surface.state
   if (held && !turning(held)) {
     const next = fromProps(props, held.seen)
-    if (next.balance !== held.seen.balance || next.lineBet !== held.seen.lineBet) {
-      surface.setState({ ...held, game: next, seen: next })
+    // a turn credited while the reels were turning is noticed here, once they are home
+    const credited = props?.credited ?? held.credited
+    const paid = credited > held.credited
+    if (paid || next.balance !== held.seen.balance || next.lineBet !== held.seen.lineBet) {
+      surface.setState({ ...held, game: next, seen: next, credited, reward: paid ? REWARD_TICKS : held.reward })
     }
   }
 
@@ -219,6 +237,7 @@ export default function Slot(props: Props, surface: ClientSurface<State>) {
         <Text>{lineBet}</Text>
         <Text dimColor>{` × ${LINE_COUNT} lines = `}</Text>
         <Text>{totalBet(lineBet)}</Text>
+        {s?.reward !== undefined ? <Text bold color="greenBright">{`  +${TURN_REWARD}`}</Text> : null}
       </Text>
       {s?.message
         ? <Text color="redBright" wrap="truncate-end">{s.message}</Text>

@@ -1,6 +1,6 @@
 /* @jsx h */
 import type { Register } from 'claude-code'
-import { INITIAL_STATE, LINE_BETS, applyDelta, type GameState } from './games/slot.ts'
+import { INITIAL_STATE, LINE_BETS, applyDelta, applyTurnReward, type GameState } from './games/slot.ts'
 
 // One command, /slot. This module is the plugin's only hooks module: it registers the command at
 // session start, mounts the board into the band above the prompt, and owns the wallet.
@@ -16,6 +16,11 @@ import { INITIAL_STATE, LINE_BETS, applyDelta, type GameState } from './games/sl
 
 let wallet: GameState = INITIAL_STATE
 let open = false
+/** how many turns Claude has finished since this session started; the board flashes each new one */
+let credited = 0
+
+/** what the board is drawn from: the wallet, plus the turn count it watches for a new +10 */
+const boardProps = () => ({ ...wallet, credited })
 
 /** whatever the store holds, turned into a wallet; anything it cannot account for starts fresh */
 const walletFrom = (balance: unknown, lineBet: unknown): GameState => ({
@@ -68,6 +73,28 @@ export const register: Register = on => {
 
   // the board posts what a spin cost and what it paid, or a new line bet — never a balance it worked
   // out itself. Re-read, apply, write back, hand the authoritative wallet forward as props.
+  // Claude finishing a turn is what pays for the next spin. It settles the same way a spin does —
+  // re-read the store, apply the difference, write it back — so a turn credited while another
+  // session is mid-spin adds to that spin's result instead of overwriting it. Nothing is said in
+  // the transcript and no toast is raised: the board flashes it, or it is there next time it opens.
+  on('turn.complete', async ($, e, next) => {
+    const r = await next(e)
+    const { agentId, isAborted } = e as { agentId?: string; isAborted?: boolean }
+    // a subagent's turn is Claude working inside this one, not another turn finished, and a turn
+    // the user interrupted was not finished at all
+    if (agentId !== undefined || isAborted === true) return r
+    const failed = (what: string) => (err: unknown) => {
+      $.ui.log(`claude-small-game: store ${what} failed: ${err}`)
+      return undefined
+    }
+    const current = walletFrom(await $.store.get('balance').catch(failed('read')), await $.store.get('lineBet').catch(failed('read')))
+    wallet = applyTurnReward(current)
+    await $.store.set('balance', wallet.balance).catch(failed('write'))
+    credited++
+    if (open) $.ui.invalidate('ui.render')
+    return r
+  })
+
   on('ui.message', async ($, e, next) => {
     const data = e.data as { slot?: unknown; bet?: unknown; win?: unknown; lineBet?: unknown } | null
     if (data?.slot !== true) return next(e)
@@ -83,7 +110,7 @@ export const register: Register = on => {
     })
     await $.store.set('balance', wallet.balance).catch(failed('write'))
     await $.store.set('lineBet', wallet.lineBet).catch(failed('write'))
-    return { props: wallet }
+    return { props: boardProps() }
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
@@ -94,7 +121,7 @@ export const register: Register = on => {
     // the module path must be a string literal: the engine reads it straight off this source
     return (
       <Box flexDirection="column">
-        <Client key="board:slot" module="./boards/slot.tsx" width={e.viewport?.columns ?? 80} props={wallet} />
+        <Client key="board:slot" module="./boards/slot.tsx" width={e.viewport?.columns ?? 80} props={boardProps()} />
         {await next(e)}
       </Box>
     )

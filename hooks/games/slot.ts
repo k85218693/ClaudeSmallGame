@@ -165,8 +165,11 @@ export const applyDelta = (current: GameState, delta: { bet?: number; win?: numb
   lineBet: delta.lineBet !== undefined && LINE_BETS.includes(delta.lineBet) ? delta.lineBet : current.lineBet,
 })
 
-/** Claude finished a turn */
-export const applyTurnReward = (state: GameState): GameState => ({ ...state, balance: state.balance + TURN_REWARD })
+/**
+ * Claude finished a turn. It is the same path a spin settles on — a win with nothing staked — so a
+ * turn credited while another session is spinning behaves exactly as that session's win does.
+ */
+export const applyTurnReward = (state: GameState): GameState => applyDelta(state, { win: TURN_REWARD })
 
 /** a line bet that is not one of the steps leaves the state alone */
 export const setLineBet = (state: GameState, lineBet: number): GameState =>
