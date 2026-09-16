@@ -66,6 +66,10 @@ credits are simply there the next time you open it. A turn you interrupt does no
 subagent's turn is part of the turn that started it rather than another one. Nothing is posted to
 the transcript and no toast is raised.
 
+A spin costs its stake the moment the reels start turning, so closing the board or ending the
+session mid-spin does not get you the spin for free — and the win, if there is one, is paid when the
+last reel lands.
+
 **One wallet per machine.** The wallet is the plugin's own store, which is one file per machine and
 not per project, so two Claude Code sessions open at once are playing the same balance. Every write
 re-reads the store, applies what changed and writes it back — a board never sends a balance it

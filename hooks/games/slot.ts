@@ -154,14 +154,23 @@ export const resolveSpin = (
   }
 }
 
+/** a number the wallet will take: finite, whole and not negative */
+const credits = (value: number | undefined): number =>
+  typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0
+
 /**
  * Apply one spin's difference to whatever the wallet holds right now. The caller re-reads the store,
  * hands the current wallet in here, and writes the result back, so two sessions spinning at once
  * settle against the same file instead of overwriting each other with a balance each worked out on
  * its own. A wallet never goes negative: the other session may already have spent what this one bet.
+ *
+ * The stake is what the floor catches, not the difference — a spin that landed a win is paid it even
+ * if the other session emptied the wallet while the reels were turning. Losing the stake to a
+ * balance that is no longer there is the race; losing the win as well would be this function's own
+ * doing.
  */
 export const applyDelta = (current: GameState, delta: { bet?: number; win?: number; lineBet?: number }): GameState => ({
-  balance: Math.max(0, current.balance - (delta.bet ?? 0) + (delta.win ?? 0)),
+  balance: Math.max(0, current.balance - credits(delta.bet)) + credits(delta.win),
   lineBet: delta.lineBet !== undefined && LINE_BETS.includes(delta.lineBet) ? delta.lineBet : current.lineBet,
 })
 
@@ -201,8 +210,10 @@ let counted: Statistics | undefined
 
 /**
  * What these strips actually pay back, counted rather than sampled: every one of STRIP_LENGTH^REELS
- * stop combinations is equally likely, so walking all of them is the RTP exactly. It takes under a
- * second and the answer never changes, so the first caller pays for it and the rest read it off.
+ * stop combinations is equally likely, so walking all of them is the RTP exactly. It takes a second
+ * or three — comfortably inside a hook's budget, and measured rather than guessed at: the suite
+ * prints the time — and the answer never changes, so the first caller pays for it and the rest read
+ * it off.
  * The board's `/slot stats` and the test that pins the RTP both call this, which is what makes the
  * number a player sees the number the suite checks.
  */

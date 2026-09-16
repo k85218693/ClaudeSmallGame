@@ -20,9 +20,10 @@ import {
 //
 // The wallet is the plugin's own key-value store, which is one file per machine — not per project —
 // so two sessions open at once are writing to the same place. That is why the board never sends an
-// absolute balance: it posts what this spin cost and what it paid, and every write here re-reads the
-// store first, applies the difference and hands the authoritative balance back as the board's next
-// props. A session that spins while another one is spinning loses nothing.
+// absolute balance: it posts the stake when the reels start turning and the win when they land, and
+// every write here re-reads the store first, applies the difference and hands the authoritative
+// balance back as the board's next props. A session that spins while another one is spinning loses
+// nothing, and a read that fails is never mistaken for a wallet that is empty.
 //
 // $ cannot be handed to a helper — the engine reads `$.noun.event(...)` off this source — so each
 // hook opens the store itself and only the arithmetic is shared.
@@ -35,11 +36,22 @@ let credited = 0
 /** what the board is drawn from: the wallet, plus the turn count it watches for a new +10 */
 const boardProps = () => ({ ...wallet, credited })
 
+/**
+ * What a read that threw hands back, so that it cannot be mistaken for a key that was never written.
+ * The difference matters more than it looks: a key with nothing under it is a first run and starts
+ * at 1000, while a store that could not be read is a wallet whose balance is unknown — and writing
+ * 1000 over it would be this plugin spending a player's credits for them.
+ */
+const UNREADABLE = Symbol('unreadable')
+
 /** whatever the store holds, turned into a wallet; anything it cannot account for starts fresh */
 const walletFrom = (balance: unknown, lineBet: unknown): GameState => ({
   balance: typeof balance === 'number' && Number.isFinite(balance) ? Math.max(0, Math.floor(balance)) : INITIAL_STATE.balance,
   lineBet: typeof lineBet === 'number' && LINE_BETS.includes(lineBet) ? lineBet : INITIAL_STATE.lineBet,
 })
+
+/** a store that will not read is a store nothing is written to; the session plays on what it holds */
+const unreadable = (...values: unknown[]): boolean => values.includes(UNREADABLE)
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
@@ -48,12 +60,16 @@ export const register: Register = on => {
     // rejection in a hook unmounts the whole module
     const failed = (what: string) => (err: unknown) => {
       $.ui.log(`claude-small-game: store ${what} failed: ${err}`)
-      return undefined
+      return UNREADABLE
     }
-    wallet = walletFrom(await $.store.get('balance').catch(failed('read')), await $.store.get('lineBet').catch(failed('read')))
-    // first run on this machine: put the starting wallet where the next session will find it
-    await $.store.set('balance', wallet.balance).catch(failed('write'))
-    await $.store.set('lineBet', wallet.lineBet).catch(failed('write'))
+    const balance = await $.store.get('balance').catch(failed('read'))
+    const lineBet = await $.store.get('lineBet').catch(failed('read'))
+    if (!unreadable(balance, lineBet)) {
+      wallet = walletFrom(balance, lineBet)
+      // first run on this machine: put the starting wallet where the next session will find it
+      await $.store.set('balance', wallet.balance).catch(failed('write'))
+      await $.store.set('lineBet', wallet.lineBet).catch(failed('write'))
+    }
     // a command that fails to register costs the game, never the session
     await $.command.register({
       name: 'slot',
@@ -96,8 +112,12 @@ export const register: Register = on => {
     if (arg === 'reset') {
       // the one place a balance is written whole rather than as a difference: a reset is meant to
       // overrule whatever the wallet holds, in this session and in any other one sharing it
-      const current = walletFrom(await $.store.get('balance').catch(failed('read')), await $.store.get('lineBet').catch(failed('read')))
-      wallet = { balance: INITIAL_STATE.balance, lineBet: current.lineBet }
+      const balance = await $.store.get('balance').catch(failed('read'))
+      const lineBet = await $.store.get('lineBet').catch(failed('read'))
+      // the line bet it keeps is the stored one, so a store that will not read cannot be reset onto
+      // a line bet this session only guessed at
+      if (unreadable(balance, lineBet)) return { text: 'slot: the wallet could not be read, so nothing was reset · try again' }
+      wallet = { balance: INITIAL_STATE.balance, lineBet: walletFrom(balance, lineBet).lineBet }
       await $.store.set('balance', wallet.balance).catch(failed('write'))
       $.ui.invalidate('ui.render')
       return {
@@ -108,8 +128,11 @@ export const register: Register = on => {
     if (arg !== '') {
       return { text: `slot: "${arg}" is not a subcommand · /slot opens the board, and stop, reset and stats are the three it takes` }
     }
-    // the balance may have moved in another session since this one last looked
-    wallet = walletFrom(await $.store.get('balance').catch(failed('read')), await $.store.get('lineBet').catch(failed('read')))
+    // the balance may have moved in another session since this one last looked; if it will not read,
+    // the board opens on the wallet this session already has rather than on one made up here
+    const balance = await $.store.get('balance').catch(failed('read'))
+    const lineBet = await $.store.get('lineBet').catch(failed('read'))
+    if (!unreadable(balance, lineBet)) wallet = walletFrom(balance, lineBet)
     open = true
     $.ui.invalidate('ui.render')
     return { text: `slot: ${wallet.balance} credits · click the board above the prompt, then space spins · + and - change the line bet · Esc returns to the prompt · /slot stop closes it` }
@@ -129,8 +152,12 @@ export const register: Register = on => {
       $.ui.log(`claude-small-game: store ${what} failed: ${err}`)
       return undefined
     }
-    const current = walletFrom(await $.store.get('balance').catch(failed('read')), await $.store.get('lineBet').catch(failed('read')))
-    wallet = applyTurnReward(current)
+    const balance = await $.store.get('balance').catch(failed('read'))
+    const lineBet = await $.store.get('lineBet').catch(failed('read'))
+    // an unreadable store swallows the credit rather than paying it against a balance nobody knows:
+    // the next turn that reads the store cleanly is the one that pays
+    if (unreadable(balance, lineBet)) return r
+    wallet = applyTurnReward(walletFrom(balance, lineBet))
     await $.store.set('balance', wallet.balance).catch(failed('write'))
     credited++
     if (open) $.ui.invalidate('ui.render')
@@ -146,12 +173,22 @@ export const register: Register = on => {
       $.ui.log(`claude-small-game: store ${what} failed: ${err}`)
       return undefined
     }
-    const current = walletFrom(await $.store.get('balance').catch(failed('read')), await $.store.get('lineBet').catch(failed('read')))
-    wallet = applyDelta(current, {
+    const balance = await $.store.get('balance').catch(failed('read'))
+    const lineBet = await $.store.get('lineBet').catch(failed('read'))
+    // applyDelta throws out anything that is not a number the wallet can take, so a board cannot
+    // mint credits with a negative bet or poison the store with a NaN. Against an unreadable store
+    // the spin settles on this session's own wallet and is not written: the board stays sensible,
+    // and nobody else's balance is overwritten by a guess.
+    const delta = {
       bet: typeof data.bet === 'number' ? data.bet : 0,
       win: typeof data.win === 'number' ? data.win : 0,
       lineBet: typeof data.lineBet === 'number' ? data.lineBet : undefined,
-    })
+    }
+    if (unreadable(balance, lineBet)) {
+      wallet = applyDelta(wallet, delta)
+      return { props: boardProps() }
+    }
+    wallet = applyDelta(walletFrom(balance, lineBet), delta)
     await $.store.set('balance', wallet.balance).catch(failed('write'))
     await $.store.set('lineBet', wallet.lineBet).catch(failed('write'))
     return { props: boardProps() }

@@ -100,8 +100,10 @@ export default function Slot(props: Props, surface: ClientSurface<State>) {
       surface.setState({ ...s, message })
       return
     }
-    // the stake leaves now and the win arrives when the last reel lands, so the balance on screen is
-    // never ahead of the reels
+    // The stake is charged to the wallet now, not when the reels land: a board that is closed or a
+    // session that ends mid-spin has still had its spin, and the credits for it should be gone. The
+    // win follows when the last reel is home, so the balance on screen is never ahead of the reels.
+    surface.post({ slot: true, bet: totalBet(s.game.lineBet) })
     surface.setState({
       ...s,
       game: { ...s.game, balance: s.game.balance - totalBet(s.game.lineBet) },
@@ -143,9 +145,11 @@ export default function Slot(props: Props, surface: ClientSurface<State>) {
       const window = rolling
         ? s.spin.outcome.window.map((column, reel) => (tick >= STOPS_AT[reel] ? column : rolling[reel]))
         : s.spin.outcome.window
-      // the moment the last reel is home: tell the hooks module what this spin cost and paid, and
-      // let it work out the balance against the store
-      if (landed && s.spin.tick < LANDED) surface.post({ slot: true, bet: totalBet(s.game.lineBet), win: s.spin.outcome.totalWin })
+      // the moment the last reel is home, and only then, the win goes to the wallet; the stake was
+      // taken when the reels started turning. A spin that paid nothing has nothing to post.
+      if (landed && s.spin.tick < LANDED && s.spin.outcome.totalWin > 0) {
+        surface.post({ slot: true, win: s.spin.outcome.totalWin })
+      }
       surface.setState({
         ...s,
         reward,

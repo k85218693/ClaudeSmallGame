@@ -245,6 +245,21 @@ describe('the wallet two sessions share', () => {
     assert.equal(store.wallet.balance, 0)
   })
 
+  it('still pays a win landed on a wallet the other session emptied', () => {
+    const store = { wallet: { balance: 0, lineBet: 10 } }
+    // the stake is what is lost to the race, never the win the reels actually landed
+    settle(store, { bet: 50, win: 20 })
+    assert.equal(store.wallet.balance, 20)
+  })
+
+  it('takes nothing from a spin that posts a number the wallet cannot use', () => {
+    const store = { wallet: { balance: 100, lineBet: 1 } }
+    for (const delta of [{ bet: NaN, win: 0 }, { bet: 0, win: Infinity }, { bet: -50, win: 0 }, { win: -10 }]) {
+      settle(store, delta)
+      assert.equal(store.wallet.balance, 100, `${JSON.stringify(delta)} should leave the balance alone`)
+    }
+  })
+
   it('carries a line bet through without touching the balance', () => {
     const store = { wallet: { balance: 120, lineBet: 1 } }
     settle(store, { lineBet: 10 })
