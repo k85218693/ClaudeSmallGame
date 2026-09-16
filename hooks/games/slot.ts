@@ -185,3 +185,43 @@ export const stepLineBet = (state: GameState, direction: number): GameState => {
   const next = Math.min(LINE_BETS.length - 1, Math.max(0, at + Math.sign(direction)))
   return setLineBet(state, LINE_BETS[next])
 }
+
+/** one row of the paytable: what a symbol pays per line for 3, 4 and 5 of a kind, at a line bet of 1 */
+export type PaytableRow = { symbol: Exclude<SlotSymbol, 'W'>; pays: readonly [number, number, number] }
+
+/** the paytable as rows, richest first — what `/slot stats` prints, in the order it prints them */
+export const paytable = (): PaytableRow[] =>
+  (Object.keys(PAYTABLE) as Exclude<SlotSymbol, 'W'>[])
+    .map(symbol => ({ symbol, pays: PAYTABLE[symbol] as readonly [number, number, number] }))
+    .sort((a, b) => b.pays[2] - a.pays[2])
+
+export type Statistics = { rtp: number; hitRate: number; combinations: number }
+
+let counted: Statistics | undefined
+
+/**
+ * What these strips actually pay back, counted rather than sampled: every one of STRIP_LENGTH^REELS
+ * stop combinations is equally likely, so walking all of them is the RTP exactly. It takes under a
+ * second and the answer never changes, so the first caller pays for it and the rest read it off.
+ * The board's `/slot stats` and the test that pins the RTP both call this, which is what makes the
+ * number a player sees the number the suite checks.
+ */
+export const statistics = (): Statistics => {
+  if (counted) return counted
+  const stops = [0, 0, 0, 0, 0]
+  let paid = 0
+  let hits = 0
+  let combinations = 0
+  for (stops[0] = 0; stops[0] < STRIP_LENGTH; stops[0]++)
+    for (stops[1] = 0; stops[1] < STRIP_LENGTH; stops[1]++)
+      for (stops[2] = 0; stops[2] < STRIP_LENGTH; stops[2]++)
+        for (stops[3] = 0; stops[3] < STRIP_LENGTH; stops[3]++)
+          for (stops[4] = 0; stops[4] < STRIP_LENGTH; stops[4]++) {
+            const { totalWin } = evaluateStops(stops, 1)
+            paid += totalWin
+            if (totalWin > 0) hits++
+            combinations++
+          }
+  counted = { rtp: paid / (combinations * totalBet(1)), hitRate: hits / combinations, combinations }
+  return counted
+}

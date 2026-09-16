@@ -1,6 +1,19 @@
 /* @jsx h */
 import type { Register } from 'claude-code'
-import { INITIAL_STATE, LINE_BETS, applyDelta, applyTurnReward, type GameState } from './games/slot.ts'
+import {
+  INITIAL_STATE,
+  LINE_BETS,
+  LINE_COUNT,
+  REELS,
+  ROWS,
+  TURN_REWARD,
+  applyDelta,
+  applyTurnReward,
+  paytable,
+  statistics,
+  totalBet,
+  type GameState,
+} from './games/slot.ts'
 
 // One command, /slot. This module is the plugin's only hooks module: it registers the command at
 // session start, mounts the board into the band above the prompt, and owns the wallet.
@@ -54,25 +67,54 @@ export const register: Register = on => {
   // every form of /slot answers here; none of them passes the command on
   on('command.run', { command: 'slot' }, async ($, e) => {
     const arg = e.args.trim().toLowerCase()
+    const failed = (what: string) => (err: unknown) => {
+      $.ui.log(`claude-small-game: store ${what} failed: ${err}`)
+      return undefined
+    }
     if (arg === 'stop') {
       open = false
       $.ui.invalidate('ui.render')
-      return { text: 'slot closed' }
+      return { text: 'slot: board closed · /slot opens it again, and the balance is where you left it' }
     }
-    if (arg !== '') return { text: `slot: "${arg}" is not a subcommand yet · /slot opens the board, /slot stop closes it` }
-    const failed = (err: unknown) => {
-      $.ui.log(`claude-small-game: store read failed: ${err}`)
-      return undefined
+    if (arg === 'stats') {
+      // counted, not sampled, and counted once per session: the first call walks every stop
+      // combination, which takes about a second, and every call after it reads the answer off
+      const { rtp, hitRate, combinations } = statistics()
+      const table = paytable().map(row => `  ${row.symbol}  ${row.pays.map(pay => String(pay).padStart(3)).join(' / ')}`)
+      return {
+        text: [
+          `slot: ${REELS} reels × ${ROWS} rows · ${LINE_COUNT} fixed lines · line bets ${LINE_BETS.join(' / ')}`,
+          `RTP ${(rtp * 100).toFixed(3)}% · hit rate ${(hitRate * 100).toFixed(2)}% · counted over all ` +
+            `${combinations.toLocaleString('en-US')} stop combinations, which is what the test suite pins`,
+          'pay per line at a line bet of 1, for 3 / 4 / 5 of a kind:',
+          ...table,
+          'W is wild on reels 2–4, joins any symbol and pays nothing on its own · wins read left to right from reel 1',
+          `Claude pays ${TURN_REWARD} credits every time it finishes a turn · a spin costs the line bet × ${LINE_COUNT} lines`,
+        ].join('\n'),
+      }
+    }
+    if (arg === 'reset') {
+      // the one place a balance is written whole rather than as a difference: a reset is meant to
+      // overrule whatever the wallet holds, in this session and in any other one sharing it
+      const current = walletFrom(await $.store.get('balance').catch(failed('read')), await $.store.get('lineBet').catch(failed('read')))
+      wallet = { balance: INITIAL_STATE.balance, lineBet: current.lineBet }
+      await $.store.set('balance', wallet.balance).catch(failed('write'))
+      $.ui.invalidate('ui.render')
+      return {
+        text: `slot: balance reset to ${wallet.balance} credits · the line bet stays where it was, at ${wallet.lineBet} ` +
+          `(${totalBet(wallet.lineBet)} a spin) · every session on this machine shares the wallet, so this resets theirs too`,
+      }
+    }
+    if (arg !== '') {
+      return { text: `slot: "${arg}" is not a subcommand · /slot opens the board, and stop, reset and stats are the three it takes` }
     }
     // the balance may have moved in another session since this one last looked
-    wallet = walletFrom(await $.store.get('balance').catch(failed), await $.store.get('lineBet').catch(failed))
+    wallet = walletFrom(await $.store.get('balance').catch(failed('read')), await $.store.get('lineBet').catch(failed('read')))
     open = true
     $.ui.invalidate('ui.render')
-    return { text: `slot: ${wallet.balance} credits · click the board above the prompt, then space spins · Esc returns to the prompt · /slot stop closes it` }
+    return { text: `slot: ${wallet.balance} credits · click the board above the prompt, then space spins · + and - change the line bet · Esc returns to the prompt · /slot stop closes it` }
   })
 
-  // the board posts what a spin cost and what it paid, or a new line bet — never a balance it worked
-  // out itself. Re-read, apply, write back, hand the authoritative wallet forward as props.
   // Claude finishing a turn is what pays for the next spin. It settles the same way a spin does —
   // re-read the store, apply the difference, write it back — so a turn credited while another
   // session is mid-spin adds to that spin's result instead of overwriting it. Nothing is said in
@@ -95,6 +137,8 @@ export const register: Register = on => {
     return r
   })
 
+  // the board posts what a spin cost and what it paid, or a new line bet — never a balance it worked
+  // out itself. Re-read, apply, write back, hand the authoritative wallet forward as props.
   on('ui.message', async ($, e, next) => {
     const data = e.data as { slot?: unknown; bet?: unknown; win?: unknown; lineBet?: unknown } | null
     if (data?.slot !== true) return next(e)

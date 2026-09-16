@@ -12,8 +12,10 @@ import {
   applyTurnReward,
   createRng,
   evaluateStops,
+  paytable,
   resolveSpin,
   setLineBet,
+  statistics,
   stepLineBet,
   totalBet,
   type GameState,
@@ -284,6 +286,15 @@ describe('return to player', () => {
     )
     assert.equal(combinations, STRIP_LENGTH ** REELS)
     assert.ok(rtp >= 0.94 && rtp <= 0.96, `RTP is ${(rtp * 100).toFixed(3)}%, outside 94%–96%`)
+    // and the number /slot stats prints is this very one: counted here independently, then compared
+    const counted = statistics()
+    assert.equal(counted.combinations, combinations)
+    assert.equal(counted.rtp, rtp)
+    assert.equal(counted.hitRate, hits / combinations)
+  })
+
+  it('counts the strips once and hands the same answer back', () => {
+    assert.equal(statistics(), statistics())
   })
 
   it('does not depend on the line bet', () => {
@@ -301,5 +312,25 @@ describe('the window handed out', () => {
       window[0][0] = '★'
     })
     assert.equal(evaluateStops([0, 0, 0, 0, 0], 1).window[0][0], window[0][0])
+  })
+})
+
+describe('the paytable a player can read', () => {
+  it('names every paying symbol, richest first, and leaves the wild out', () => {
+    const rows = paytable()
+    const symbols = rows.map(row => row.symbol)
+    assert.deepEqual(symbols, ['★', '◆', '♠', '♥', 'K', 'Q'])
+    for (const row of rows) {
+      assert.equal(row.pays.length, 3, `${row.symbol} should pay for 3, 4 and 5 of a kind`)
+      assert.ok(row.pays[0] < row.pays[1] && row.pays[1] < row.pays[2], `${row.symbol} should pay more for more`)
+    }
+  })
+
+  it('pays what a winning line actually pays', () => {
+    // the printed table is the one the engine scores with, not a copy of it that can drift
+    for (const row of paytable()) {
+      const stops = rowOf(MIDDLE, [row.symbol, row.symbol, row.symbol, row.symbol, row.symbol])
+      assert.equal(lineWin(stops, 1, 0)?.pay, row.pays[2], `five ${row.symbol} should pay ${row.pays[2]}`)
+    }
   })
 })
